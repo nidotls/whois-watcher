@@ -143,7 +143,7 @@ func whoisDomain(domain string) string {
 	lines := strings.Split(result, "\n")
 	result = ""
 	for _, line := range lines {
-		if strings.HasPrefix(line, "%") || strings.HasPrefix(line, ">>>") {
+		if strings.HasPrefix(line, "%") || strings.HasPrefix(line, ">>>") || strings.Contains(line, "WHOIS lookup made on ") {
 			continue
 		}
 		result += line + "\n"
