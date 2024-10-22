@@ -34,13 +34,32 @@ func main() {
 	}
 
 	for {
-		run(workDir, domains)
+		err = run(workDir, domains)
+
+		if err != nil {
+			logrus.Errorf("run error: %v", err)
+
+			// try to send error message to discord
+			content := "# Error occurred"
+			if os.Getenv("NOTIFY_DISCORD_USER_ID") != "" {
+				content += "\n\n<@" + os.Getenv("NOTIFY_DISCORD_USER_ID") + ">"
+			}
+			content += "\n\n```\n" + err.Error() + "```"
+			message := discordwebhook.Message{
+				Content: &content,
+			}
+
+			err = discordwebhook.SendMessage(os.Getenv("NOTIFY_DISCORD_WEBHOOK"), message)
+			if err != nil {
+				logrus.Fatalf("send error message to discord error: %v", err)
+			}
+		}
 
 		time.Sleep(12 * time.Hour)
 	}
 }
 
-func run(workDir string, domains []string) {
+func run(workDir string, domains []string) error {
 	for _, domain := range domains {
 		log := logrus.WithField("domain", domain)
 
@@ -48,30 +67,26 @@ func run(workDir string, domains []string) {
 
 		file, err := os.ReadFile(path.Join(workDir, fmt.Sprintf("%s.txt", domain)))
 		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				log.Infof("file not exist, create new file")
-			} else {
-				log.Errorf("read file error: %v", err)
+			if !errors.Is(err, os.ErrNotExist) {
+				return err
 			}
 
+			log.Infof("file not exist, create new file")
 			err = os.WriteFile(path.Join(workDir, fmt.Sprintf("%s.txt", domain)), []byte(result), 0644)
 			if err != nil {
-				log.Errorf("write file error: %v", err)
-				continue
+				return err
 			}
 			continue
 		}
 
 		err = os.WriteFile(path.Join(workDir, fmt.Sprintf("%s.txt", domain)), []byte(result), 0644)
 		if err != nil {
-			log.Errorf("write file error: %v", err)
-			continue
+			return err
 		}
 
 		diff, err := diffLineByLine(string(file), result)
 		if err != nil {
-			log.Errorf("diff error: %v", err)
-			continue
+			return err
 		}
 
 		if len(diff) == 0 {
@@ -95,15 +110,16 @@ func run(workDir string, domains []string) {
 
 		err = discordwebhook.SendMessage(os.Getenv("NOTIFY_DISCORD_WEBHOOK"), message)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 
 		err = os.WriteFile(path.Join(workDir, "history", fmt.Sprintf("%s.%d.diff", domain, time.Now().Unix())), []byte(diff), 0644)
 		if err != nil {
 			log.Errorf("write diff file error: %v", err)
-			continue
 		}
 	}
+
+	return nil
 }
 
 func diffLineByLine(from, to string) (string, error) {
