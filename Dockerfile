@@ -15,7 +15,7 @@ RUN GOOS=linux GOARCH=amd64 go build -o /bin/whois-watcher
 
 # Stage 3: Final
 FROM ubuntu:jammy
-COPY --from=builder /go/bin/playwright /bin/whois-watcher /
+COPY --from=builder /bin/whois-watcher /
 RUN apt-get update && apt-get install -y ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/*
 
