@@ -63,7 +63,10 @@ func run(workDir string, domains []string) error {
 	for _, domain := range domains {
 		log := logrus.WithField("domain", domain)
 
-		result := whoisDomain(domain)
+		result, err := whoisDomain(domain)
+		if err != nil {
+			return err
+		}
 
 		file, err := os.ReadFile(path.Join(workDir, fmt.Sprintf("%s.txt", domain)))
 		if err != nil {
@@ -78,7 +81,7 @@ func run(workDir string, domains []string) error {
 			}
 			continue
 		}
-
+		
 		err = os.WriteFile(path.Join(workDir, fmt.Sprintf("%s.txt", domain)), []byte(result), 0644)
 		if err != nil {
 			return err
@@ -150,10 +153,10 @@ func diffLineByLine(from, to string) (string, error) {
 	return string(out), nil
 }
 
-func whoisDomain(domain string) string {
+func whoisDomain(domain string) (string, error) {
 	result, err := whois.Whois(domain)
 	if err != nil {
-		return err.Error()
+		return "", err
 	}
 
 	lines := strings.Split(result, "\n")
@@ -165,5 +168,5 @@ func whoisDomain(domain string) string {
 		result += line + "\n"
 	}
 
-	return result
+	return result, nil
 }
