@@ -28,6 +28,10 @@ func main() {
 	if err != nil {
 		logrus.Fatalf("create work dir error: %v", err)
 	}
+	err = os.MkdirAll(path.Join(workDir, "diff"), 0755)
+	if err != nil {
+		logrus.Fatalf("create diff work dir error: %v", err)
+	}
 	err = os.MkdirAll(path.Join(workDir, "history"), 0755)
 	if err != nil {
 		logrus.Fatalf("create history work dir error: %v", err)
@@ -44,7 +48,12 @@ func main() {
 			if os.Getenv("NOTIFY_DISCORD_USER_ID") != "" {
 				content += "\n\n<@" + os.Getenv("NOTIFY_DISCORD_USER_ID") + ">"
 			}
-			content += "\n\n```\n" + err.Error() + "```"
+			errStr := err.Error()
+			if len(errStr) > 1800 {
+				logrus.Warnf("error message is too long, truncate it")
+				errStr = errStr[:1800]
+			}
+			content += "\n\n```\n" + errStr + "```"
 			message := discordwebhook.Message{
 				Content: &content,
 			}
@@ -65,60 +74,77 @@ func run(workDir string, domains []string) error {
 
 		result, err := whoisDomain(domain)
 		if err != nil {
-			return err
+			return fmt.Errorf("whois error on domain %s: %v", domain, err)
 		}
 
 		file, err := os.ReadFile(path.Join(workDir, fmt.Sprintf("%s.txt", domain)))
 		if err != nil {
 			if !errors.Is(err, os.ErrNotExist) {
-				return err
+				return fmt.Errorf("read file error on domain %s: %v", domain, err)
 			}
 
 			log.Infof("file not exist, create new file")
 			err = os.WriteFile(path.Join(workDir, fmt.Sprintf("%s.txt", domain)), []byte(result), 0644)
 			if err != nil {
-				return err
+				return fmt.Errorf("write file error on domain %s: %v", domain, err)
+			}
+
+			err = os.WriteFile(path.Join(workDir, "history", fmt.Sprintf("%s.%d.txt", domain, time.Now().Unix())), []byte(result), 0644)
+			if err != nil {
+				log.Errorf("write history file error on domain %s: %v", domain, err)
 			}
 			continue
 		}
-		
+
+		if _, err := os.Stat(path.Join(workDir, fmt.Sprintf("%s.txt", domain))); os.IsNotExist(err) {
+			err = os.WriteFile(path.Join(workDir, "history", fmt.Sprintf("%s.%d.txt", domain, time.Now().Unix())), []byte(result), 0644)
+			if err != nil {
+				log.Errorf("write history file error on domain %s: %v", domain, err)
+			}
+		}
+
 		err = os.WriteFile(path.Join(workDir, fmt.Sprintf("%s.txt", domain)), []byte(result), 0644)
 		if err != nil {
-			return err
+			return fmt.Errorf("write file error on domain %s: %v", domain, err)
 		}
 
 		diff, err := diffLineByLine(string(file), result)
 		if err != nil {
-			return err
+			return fmt.Errorf("diff error on domain %s: %v", domain, err)
 		}
 
 		if len(diff) == 0 {
-			log.Infof("whois result is same as before")
+			log.Debugf("whois result is same as before")
 			continue
 		}
 
-		log.Infof("whois result is different from before:")
+		log.Infof("has been changed", domain)
+
+		log.Debugf("whois result is different from before:")
 		for _, line := range strings.Split(diff, "\n") {
-			log.Infof("   %s", line)
+			log.Debugf("   %s", line)
 		}
 
-		content := "# Domain `" + domain + "` has been changed"
-		if os.Getenv("NOTIFY_DISCORD_USER_ID") != "" {
-			content += "\n\n<@" + os.Getenv("NOTIFY_DISCORD_USER_ID") + ">"
-		}
-		content += "\n\n```diff\n" + diff + "```"
-		message := discordwebhook.Message{
-			Content: &content,
-		}
-
-		err = discordwebhook.SendMessage(os.Getenv("NOTIFY_DISCORD_WEBHOOK"), message)
+		err = os.WriteFile(path.Join(workDir, "history", fmt.Sprintf("%s.%d.txt", domain, time.Now().Unix())), []byte(result), 0644)
 		if err != nil {
-			return err
+			log.Errorf("write history file error: %v", err)
 		}
-
-		err = os.WriteFile(path.Join(workDir, "history", fmt.Sprintf("%s.%d.diff", domain, time.Now().Unix())), []byte(diff), 0644)
+		err = os.WriteFile(path.Join(workDir, "diff", fmt.Sprintf("%s.%d.diff", domain, time.Now().Unix())), []byte(diff), 0644)
 		if err != nil {
 			log.Errorf("write diff file error: %v", err)
+		}
+
+		messages := generateMessagesFromDiff(domain, diff)
+
+		var errs []error
+		for _, message := range messages {
+			err = discordwebhook.SendMessage(os.Getenv("NOTIFY_DISCORD_WEBHOOK"), message)
+			if err != nil {
+				errs = append(errs, err)
+			}
+		}
+		if len(errs) > 0 {
+			return fmt.Errorf("send discord message error: %v", errs)
 		}
 	}
 
@@ -169,4 +195,53 @@ func whoisDomain(domain string) (string, error) {
 	}
 
 	return result, nil
+}
+
+func generateMessagesFromDiff(domain string, diff string) []discordwebhook.Message {
+	header := "# Domain `" + domain + "` has been changed"
+	if os.Getenv("NOTIFY_DISCORD_USER_ID") != "" {
+		header += "\n\n<@" + os.Getenv("NOTIFY_DISCORD_USER_ID") + ">"
+	}
+	header += "\n\n"
+
+	lines := strings.Split(diff, "\n")
+	var lineBlocks []string
+	currentLineBlock := ""
+	for _, line := range lines {
+		if len(lineBlocks) == 0 && len(header)+len(currentLineBlock)+len(line) > 1950 {
+			lineBlocks = append(lineBlocks, currentLineBlock)
+			currentLineBlock = ""
+		}
+
+		if len(lineBlocks) > 0 && len(currentLineBlock)+len(line) > 1950 {
+			lineBlocks = append(lineBlocks, currentLineBlock)
+			currentLineBlock = ""
+		}
+
+		if len(currentLineBlock) > 0 {
+			currentLineBlock += "\n"
+		}
+		currentLineBlock += line
+	}
+	if len(currentLineBlock) > 0 {
+		lineBlocks = append(lineBlocks, currentLineBlock)
+	}
+
+	var messages []discordwebhook.Message
+
+	for i, lineBlock := range lineBlocks {
+		content := ""
+		if i == 0 {
+			content = header
+			content += "```diff\n" + lineBlock + "\n```"
+		} else {
+			content = "```diff\n" + lineBlock + "\n```"
+		}
+
+		messages = append(messages, discordwebhook.Message{
+			Content: &content,
+		})
+	}
+
+	return messages
 }
