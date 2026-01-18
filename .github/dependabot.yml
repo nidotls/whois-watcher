@@ -2,7 +2,6 @@ version: 2
 updates:
   - package-ecosystem: "gomod"
     directory: "/"
-    target-branch: "develop"
     open-pull-requests-limit: 20
     schedule:
       interval: "daily"
@@ -10,7 +9,6 @@ updates:
       timezone: "Europe/Berlin"
   - package-ecosystem: "docker"
     directory: "/"
-    target-branch: "develop"
     open-pull-requests-limit: 20
     schedule:
       interval: "daily"
@@ -18,7 +16,6 @@ updates:
       timezone: "Europe/Berlin"
   - package-ecosystem: "github-actions"
     directory: "/"
-    target-branch: "develop"
     open-pull-requests-limit: 20
     schedule:
       interval: "daily"
